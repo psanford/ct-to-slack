@@ -49,6 +49,18 @@ func Handler(evt events.S3Event) error {
 		lgr.Error("get_webhook_url_err", "err", err)
 	}
 
+	domainsToNotifyStr, err := kv.Get("domains")
+	var notifyDomains map[string]struct{}
+	if err == nil {
+		domains := strings.Split(domainsToNotifyStr, " ")
+		if len(domains) > 0 {
+			notifyDomains = make(map[string]struct{})
+			for _, d := range domains {
+				notifyDomains[d] = struct{}{}
+			}
+		}
+	}
+
 	for _, rec := range evt.Records {
 		key := rec.S3.Object.Key
 		if !strings.HasPrefix(key, prefix) {
@@ -89,6 +101,21 @@ func Handler(evt events.S3Event) error {
 		if logEntry.X509Cert == nil {
 			lgr.Error("expected x509 cert but got none", "key", key)
 			return nil
+		}
+
+		if notifyDomains != nil {
+			var notify bool
+			for _, name := range logEntry.X509Cert.DNSNames {
+				if _, should := notifyDomains[name]; should {
+					notify = true
+					break
+				}
+			}
+
+			if !notify {
+				lgr.Info("domain not in allow list", "cn", logEntry.X509Cert.Subject.CommonName, "dns", logEntry.X509Cert.DNSNames)
+				return nil
+			}
 		}
 
 		cert, err := x509.ParseCertificate(logEntry.X509Cert.Raw)
